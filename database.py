@@ -46,7 +46,8 @@ def init_db() -> None:
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 log_date TEXT NOT NULL,
                 meal_name TEXT NOT NULL,
-                meal_time TEXT NOT NULL
+                meal_time TEXT NOT NULL,
+                carbs_grams INTEGER
             )
             """
         )
@@ -61,6 +62,18 @@ def init_db() -> None:
             )
             """
         )
+        conn.commit()
+        _ensure_meal_carbs_column(conn)
+
+
+def _ensure_meal_carbs_column(conn: sqlite3.Connection) -> None:
+    """Add carbs_grams column to meal_logs if the DB was created pre-update."""
+    columns = {
+        row["name"]
+        for row in conn.execute("PRAGMA table_info(meal_logs)").fetchall()
+    }
+    if "carbs_grams" not in columns:
+        conn.execute("ALTER TABLE meal_logs ADD COLUMN carbs_grams INTEGER")
         conn.commit()
 
 
@@ -102,20 +115,20 @@ def delete_sleep_log(log_date: str) -> None:
 
 # Meal operations ----------------------------------------------------------
 
-def add_meal(log_date: str, meal_name: str, meal_time: str) -> None:
+def add_meal(log_date: str, meal_name: str, meal_time: str, carbs_grams: Optional[int]) -> None:
     with closing(get_connection()) as conn:
         conn.execute(
-            "INSERT INTO meal_logs (log_date, meal_name, meal_time) VALUES (?, ?, ?)",
-            (log_date, meal_name, meal_time),
+            "INSERT INTO meal_logs (log_date, meal_name, meal_time, carbs_grams) VALUES (?, ?, ?, ?)",
+            (log_date, meal_name, meal_time, carbs_grams),
         )
         conn.commit()
 
 
-def update_meal(meal_id: int, meal_name: str, meal_time: str) -> None:
+def update_meal(meal_id: int, meal_name: str, meal_time: str, carbs_grams: Optional[int]) -> None:
     with closing(get_connection()) as conn:
         conn.execute(
-            "UPDATE meal_logs SET meal_name = ?, meal_time = ? WHERE id = ?",
-            (meal_name, meal_time, meal_id),
+            "UPDATE meal_logs SET meal_name = ?, meal_time = ?, carbs_grams = ? WHERE id = ?",
+            (meal_name, meal_time, carbs_grams, meal_id),
         )
         conn.commit()
 
@@ -266,16 +279,16 @@ def get_history(category: str, start_date: str, end_date: str) -> List[Dict[str,
         else:
             rows = conn.execute(
                 """
-                SELECT 'sleep' AS category, id, log_date, wake_time, sleep_time, NULL AS meal_name,
-                       NULL AS meal_time, NULL AS workout_name, NULL AS start_time, NULL AS duration_minutes
+                  SELECT 'sleep' AS category, id, log_date, wake_time, sleep_time, NULL AS meal_name,
+                      NULL AS meal_time, NULL AS carbs_grams, NULL AS workout_name, NULL AS start_time, NULL AS duration_minutes
                 FROM sleep_logs
                 WHERE log_date BETWEEN ? AND ?
                 UNION ALL
-                SELECT 'meals' AS category, id, log_date, NULL, NULL, meal_name, meal_time, NULL, NULL, NULL
+                  SELECT 'meals' AS category, id, log_date, NULL, NULL, meal_name, meal_time, carbs_grams, NULL, NULL, NULL
                 FROM meal_logs
                 WHERE log_date BETWEEN ? AND ?
                 UNION ALL
-                SELECT 'workouts' AS category, id, log_date, NULL, NULL, NULL, NULL, workout_name, start_time, duration_minutes
+                  SELECT 'workouts' AS category, id, log_date, NULL, NULL, NULL, NULL, NULL, workout_name, start_time, duration_minutes
                 FROM workout_logs
                 WHERE log_date BETWEEN ? AND ?
                 ORDER BY log_date DESC

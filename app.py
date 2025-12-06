@@ -2,7 +2,7 @@ import csv
 import datetime as dt
 import io
 import os
-from typing import Optional
+from typing import Callable, Optional
 
 import streamlit as st
 
@@ -31,6 +31,25 @@ def _rerun() -> None:
         st.rerun()
     except AttributeError:
         st.experimental_rerun()
+
+
+def _render_history_item(text: str, button_key: str, on_delete: Callable[[], None]) -> None:
+    info_col, delete_col = st.columns([6, 1])
+    info_col.write(text)
+    if delete_col.button("Delete", key=button_key):
+        on_delete()
+        st.warning("Entry deleted.")
+        _rerun()
+
+
+def _delete_history_entry(category: str, row: dict) -> None:
+    normalized = category.lower()
+    if normalized == "sleep":
+        db.delete_sleep_log(row["log_date"])
+    elif normalized == "meals":
+        db.delete_meal(row["id"])
+    elif normalized == "workouts":
+        db.delete_workout(row["id"])
 
 
 def _history_to_csv(rows: list[dict]) -> bytes:
@@ -170,12 +189,13 @@ with tab_meals:
         meal_date = st.date_input("Meal date", value=_default_date(), key="meal_date")
         meal_name = st.text_input("Meal description", placeholder="Breakfast, smoothie, etc.")
         meal_time = st.time_input("Meal time", value=dt.datetime.now().time().replace(second=0, microsecond=0))
+        carbs_grams = st.number_input("Carbohydrates (g)", min_value=0, max_value=400, value=0, step=1)
         submit_meal = st.form_submit_button("Add Meal")
         if submit_meal:
             if not meal_name.strip():
                 st.error("Meal description is required.")
             else:
-                db.add_meal(_fmt_date(meal_date), meal_name.strip(), _time_to_str(meal_time))
+                db.add_meal(_fmt_date(meal_date), meal_name.strip(), _time_to_str(meal_time), int(carbs_grams))
                 st.success("Meal saved.")
                 _rerun()
 
@@ -186,13 +206,22 @@ with tab_meals:
         st.info("No meals logged yet for this date.")
     else:
         for meal in meals:
-            with st.expander(f"{meal['meal_time']} · {meal['meal_name']}"):
+            carb_label = f" · {meal['carbs_grams']} g carbs" if meal.get("carbs_grams") is not None else ""
+            with st.expander(f"{meal['meal_time']} · {meal['meal_name']}{carb_label}"):
                 with st.form(f"edit_meal_{meal['id']}"):
                     new_name = st.text_input("Meal", value=meal["meal_name"], key=f"meal_name_{meal['id']}")
                     new_time = st.time_input(
                         "Time",
                         value=_parse_time(meal["meal_time"], dt.time(12, 0)),
                         key=f"meal_time_{meal['id']}",
+                    )
+                    new_carbs = st.number_input(
+                        "Carbohydrates (g)",
+                        min_value=0,
+                        max_value=400,
+                        value=int(meal.get("carbs_grams") or 0),
+                        step=1,
+                        key=f"carbs_{meal['id']}"
                     )
                     col_save, col_delete = st.columns([3, 1])
                     save = col_save.form_submit_button("Save changes")
@@ -205,7 +234,12 @@ with tab_meals:
                         if not new_name.strip():
                             st.error("Meal description cannot be empty.")
                         else:
-                            db.update_meal(meal["id"], new_name.strip(), _time_to_str(new_time))
+                            db.update_meal(
+                                meal["id"],
+                                new_name.strip(),
+                                _time_to_str(new_time),
+                                int(new_carbs),
+                            )
                             st.success("Meal updated.")
                             _rerun()
     st.markdown("</div>", unsafe_allow_html=True)
@@ -290,9 +324,10 @@ with tab_history:
     else:
         start_date, end_date = default_range
     category = st.selectbox("Filter by category", ("All", "Sleep", "Meals", "Workouts"))
+    normalized_category = category.lower()
     st.markdown("---")
 
-    history = db.get_history(category.lower(), _fmt_date(start_date), _fmt_date(end_date))
+    history = db.get_history(normalized_category, _fmt_date(start_date), _fmt_date(end_date))
     if not history:
         st.info("No entries in this range.")
     else:
@@ -303,13 +338,38 @@ with tab_history:
             file_name=f"history_{_fmt_date(start_date)}_{_fmt_date(end_date)}.csv",
             mime="text/csv",
         )
-
-        if category.lower() == "sleep":
-            st.table(history)
-        elif category.lower() == "meals":
-            st.table(history)
-        elif category.lower() == "workouts":
-            st.table(history)
+        if normalized_category == "sleep":
+            for entry in history:
+                text = (
+                    f"🛌 {entry['log_date']}: asleep at {entry['sleep_time']} · wake at {entry['wake_time']}"
+                )
+                _render_history_item(
+                    text,
+                    f"hist_sleep_{entry['id']}",
+                    lambda row=entry: _delete_history_entry("sleep", row),
+                )
+        elif normalized_category == "meals":
+            for entry in history:
+                carbs = entry.get("carbs_grams")
+                carb_text = f" ({carbs} g carbs)" if carbs is not None else ""
+                text = (
+                    f"🍽️ {entry['log_date']}: {entry['meal_name']} at {entry['meal_time']}{carb_text}"
+                )
+                _render_history_item(
+                    text,
+                    f"hist_meal_{entry['id']}",
+                    lambda row=entry: _delete_history_entry("meals", row),
+                )
+        elif normalized_category == "workouts":
+            for entry in history:
+                text = (
+                    f"💪 {entry['log_date']}: {entry['workout_name']} at {entry['start_time']} ({entry['duration_minutes']} min)"
+                )
+                _render_history_item(
+                    text,
+                    f"hist_workout_{entry['id']}",
+                    lambda row=entry: _delete_history_entry("workouts", row),
+                )
         else:
             grouped = {}
             for row in history:
@@ -318,15 +378,22 @@ with tab_history:
                 st.markdown(f"### {log_date}")
                 for row in rows:
                     if row["category"] == "sleep":
-                        st.write(
+                        text = (
                             f"🛌 Sleep: asleep at {row['sleep_time']} · wake at {row['wake_time']}"
                         )
                     elif row["category"] == "meals":
-                        st.write(
-                            f"🍽️ Meal: {row['meal_name']} at {row['meal_time']}"
+                        carbs = row.get("carbs_grams")
+                        carb_text = f" ({carbs} g carbs)" if carbs is not None else ""
+                        text = (
+                            f"🍽️ Meal: {row['meal_name']} at {row['meal_time']}{carb_text}"
                         )
                     else:
-                        st.write(
+                        text = (
                             f"💪 Workout: {row['workout_name']} at {row['start_time']} ({row['duration_minutes']} min)"
                         )
+                    _render_history_item(
+                        text,
+                        f"hist_all_{row['category']}_{row['id']}",
+                        lambda r=row: _delete_history_entry(r["category"], r),
+                    )
     st.markdown("</div>", unsafe_allow_html=True)

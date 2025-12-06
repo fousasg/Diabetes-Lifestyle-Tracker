@@ -6,8 +6,10 @@ A minimalist Streamlit web app for a single user to log sleep, meals, and workou
 
 - Fast forms to capture sleep, meal, and workout data tied to specific dates
 - Inline editing/deleting for every entry
+- Meal tracking records carbohydrates (grams) alongside time and description
 - SQLite storage that initializes automatically and persists locally
 - History tab with date-range and category filters plus a grouped timeline view
+- Delete any sleep, meal, or workout entry directly from the History tab
 - One-click CSV export for whatever slice of history you filter
 - Responsive one-page layout with accessible controls
 
