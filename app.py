@@ -174,11 +174,6 @@ with tab_sleep:
             db.upsert_sleep_log(_fmt_date(selected_date), _time_to_str(wake_time), _time_to_str(sleep_time))
             st.success("Sleep entry saved.")
             _rerun()
-    if existing:
-        if st.button("Clear this sleep entry", type="secondary"):
-            db.delete_sleep_log(_fmt_date(selected_date))
-            st.info("Sleep entry removed.")
-            _rerun()
     st.markdown("</div>", unsafe_allow_html=True)
 
 
@@ -198,50 +193,6 @@ with tab_meals:
                 db.add_meal(_fmt_date(meal_date), meal_name.strip(), _time_to_str(meal_time), int(carbs_grams))
                 st.success("Meal saved.")
                 _rerun()
-
-    st.markdown("---")
-    st.subheader("Meals for {0}".format(_fmt_date(_default_date())))
-    meals = db.get_meals_for_date(_fmt_date(_default_date()))
-    if not meals:
-        st.info("No meals logged yet for this date.")
-    else:
-        for meal in meals:
-            carb_label = f" · {meal['carbs_grams']} g carbs" if meal.get("carbs_grams") is not None else ""
-            with st.expander(f"{meal['meal_time']} · {meal['meal_name']}{carb_label}"):
-                with st.form(f"edit_meal_{meal['id']}"):
-                    new_name = st.text_input("Meal", value=meal["meal_name"], key=f"meal_name_{meal['id']}")
-                    new_time = st.time_input(
-                        "Time",
-                        value=_parse_time(meal["meal_time"], dt.time(12, 0)),
-                        key=f"meal_time_{meal['id']}",
-                    )
-                    new_carbs = st.number_input(
-                        "Carbohydrates (g)",
-                        min_value=0,
-                        max_value=400,
-                        value=int(meal.get("carbs_grams") or 0),
-                        step=1,
-                        key=f"carbs_{meal['id']}"
-                    )
-                    col_save, col_delete = st.columns([3, 1])
-                    save = col_save.form_submit_button("Save changes")
-                    delete = col_delete.form_submit_button("Delete", type="secondary")
-                    if delete:
-                        db.delete_meal(meal["id"])
-                        st.warning("Meal removed.")
-                        _rerun()
-                    elif save:
-                        if not new_name.strip():
-                            st.error("Meal description cannot be empty.")
-                        else:
-                            db.update_meal(
-                                meal["id"],
-                                new_name.strip(),
-                                _time_to_str(new_time),
-                                int(new_carbs),
-                            )
-                            st.success("Meal updated.")
-                            _rerun()
     st.markdown("</div>", unsafe_allow_html=True)
 
 
@@ -266,48 +217,6 @@ with tab_workouts:
                 )
                 st.success("Workout saved.")
                 _rerun()
-
-    st.markdown("---")
-    st.subheader("Workouts for {0}".format(_fmt_date(_default_date())))
-    workouts = db.get_workouts_for_date(_fmt_date(_default_date()))
-    if not workouts:
-        st.info("No workouts logged yet for this date.")
-    else:
-        for workout in workouts:
-            with st.expander(f"{workout['start_time']} · {workout['workout_name']}"):
-                with st.form(f"edit_workout_{workout['id']}"):
-                    new_name = st.text_input("Workout", value=workout["workout_name"], key=f"workout_name_{workout['id']}")
-                    new_start = st.time_input(
-                        "Start",
-                        value=_parse_time(workout["start_time"], dt.time(7, 0)),
-                        key=f"start_time_{workout['id']}",
-                    )
-                    new_duration = st.number_input(
-                        "Duration",
-                        min_value=5,
-                        max_value=300,
-                        value=int(workout["duration_minutes"]),
-                        key=f"duration_{workout['id']}",
-                    )
-                    col_save, col_delete = st.columns([3, 1])
-                    save = col_save.form_submit_button("Save changes")
-                    delete = col_delete.form_submit_button("Delete", type="secondary")
-                    if delete:
-                        db.delete_workout(workout["id"])
-                        st.warning("Workout removed.")
-                        _rerun()
-                    elif save:
-                        if not new_name.strip():
-                            st.error("Workout name cannot be empty.")
-                        else:
-                            db.update_workout(
-                                workout["id"],
-                                new_name.strip(),
-                                _time_to_str(new_start),
-                                int(new_duration),
-                            )
-                            st.success("Workout updated.")
-                            _rerun()
     st.markdown("</div>", unsafe_allow_html=True)
 
 
