@@ -11,6 +11,7 @@ A minimalist Streamlit web app for a single user to log sleep, meals, and workou
 - History tab with date-range and category filters plus a grouped timeline view
 - Delete any sleep, meal, or workout entry directly from the History tab
 - One-click CSV export for whatever slice of history you filter
+- Import CSV files (matching the export format) to bulk-load history entries
 - Responsive one-page layout with accessible controls
 
 ## Project Structure
@@ -34,6 +35,13 @@ A minimalist Streamlit web app for a single user to log sleep, meals, and workou
    streamlit run app.py
    ```
 3. Open the provided local URL (typically `http://localhost:8501`).
+
+### Importing history from CSV
+
+1. Use the History tab’s **Download CSV** button to learn the required column names.
+2. Populate or edit that CSV externally (leave irrelevant columns blank per row).
+3. In the History tab, open “Import history from CSV,” choose your file, and click **Import entries**.
+4. Valid rows are inserted (sleep rows overwrite by date, meals/workouts append new entries). Any issues per row are reported inline.
 
 ### Optional: Require an Access Code
 

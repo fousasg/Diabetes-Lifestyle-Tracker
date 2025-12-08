@@ -2,7 +2,7 @@ import csv
 import datetime as dt
 import io
 import os
-from typing import Callable, Optional
+from typing import Callable, List, Optional
 
 import streamlit as st
 
@@ -11,6 +11,28 @@ import database as db
 
 def _fmt_date(value: dt.date) -> str:
     return value.strftime("%Y-%m-%d")
+        
+    st.markdown("---")
+    st.subheader("Import history from CSV")
+    upload = st.file_uploader(
+        "Select a CSV exported from this tracker",
+        type="csv",
+        key="history_upload",
+        help="Use the download above to see exact column names."
+    )
+    import_clicked = st.button("Import entries", key="import_history_button")
+    if upload is None and import_clicked:
+        st.warning("Choose a CSV file before importing.")
+    if upload is not None and import_clicked:
+        added, errors = _import_history_from_csv(upload.getvalue())
+        if added:
+            st.success(f"Imported {added} entr{'y' if added == 1 else 'ies'} from CSV.")
+        if errors:
+            st.error("\n".join(errors))
+        if added:
+            _rerun()
+    st.caption("CSV file must include log_date plus the relevant columns for sleep, meals, or workouts. Export first to confirm headers.")
+
 
 
 def _parse_time(value: Optional[str], fallback: dt.time) -> dt.time:
@@ -24,6 +46,11 @@ def _parse_time(value: Optional[str], fallback: dt.time) -> dt.time:
 
 def _time_to_str(value: dt.time) -> str:
     return value.strftime("%H:%M")
+
+
+def _current_time_slot() -> dt.time:
+    """Return "now" rounded down to the nearest minute for widget defaults."""
+    return dt.datetime.now().replace(second=0, microsecond=0).time()
 
 
 def _rerun() -> None:
@@ -62,6 +89,67 @@ def _history_to_csv(rows: list[dict]) -> bytes:
     writer.writeheader()
     writer.writerows(rows)
     return buffer.getvalue().encode("utf-8")
+
+
+def _infer_category_from_row(row: dict[str, str]) -> Optional[str]:
+    category = (row.get("category") or "").strip().lower()
+    if category in {"sleep", "meals", "workouts"}:
+        return category
+    if row.get("sleep_time") or row.get("wake_time"):
+        return "sleep"
+    if row.get("meal_name"):
+        return "meals"
+    if row.get("workout_name"):
+        return "workouts"
+    return None
+
+
+def _import_history_from_csv(file_data: bytes) -> tuple[int, List[str]]:
+    """Parse uploaded CSV bytes and insert rows into the database."""
+    decoded = file_data.decode("utf-8")
+    reader = csv.DictReader(io.StringIO(decoded))
+    added = 0
+    errors: List[str] = []
+    for idx, row in enumerate(reader, start=1):
+        category = _infer_category_from_row(row)
+        if not category:
+            errors.append(f"Row {idx}: Unable to determine category; skipped.")
+            continue
+        log_date = (row.get("log_date") or "").strip()
+        if not log_date:
+            errors.append(f"Row {idx}: Missing log_date; skipped.")
+            continue
+        try:
+            if category == "sleep":
+                wake_time = (row.get("wake_time") or "").strip()
+                sleep_time = (row.get("sleep_time") or "").strip()
+                if not wake_time or not sleep_time:
+                    raise ValueError("sleep entries require wake_time and sleep_time")
+                db.upsert_sleep_log(log_date, wake_time, sleep_time)
+            elif category == "meals":
+                meal_name = (row.get("meal_name") or "").strip()
+                meal_time = (row.get("meal_time") or "").strip()
+                if not meal_name or not meal_time:
+                    raise ValueError("meal entries require meal_name and meal_time")
+                carbs_raw = (row.get("carbs_grams") or "").strip()
+                carbs_val = int(carbs_raw) if carbs_raw else None
+                db.add_meal(log_date, meal_name, meal_time, carbs_val)
+            else:  # workouts
+                workout_name = (row.get("workout_name") or "").strip()
+                start_time = (row.get("start_time") or "").strip()
+                duration_raw = (row.get("duration_minutes") or "").strip()
+                if not workout_name or not start_time or not duration_raw:
+                    raise ValueError("workout entries require workout_name, start_time, duration_minutes")
+                db.add_workout(
+                    log_date,
+                    workout_name,
+                    start_time,
+                    int(duration_raw),
+                )
+            added += 1
+        except Exception as exc:  # pragma: no cover - defensive path
+            errors.append(f"Row {idx}: {exc}")
+    return added, errors
 
 
 def _get_access_code() -> Optional[str]:
@@ -183,7 +271,13 @@ with tab_meals:
     with st.form("new_meal"):
         meal_date = st.date_input("Meal date", value=_default_date(), key="meal_date")
         meal_name = st.text_input("Meal description", placeholder="Breakfast, smoothie, etc.")
-        meal_time = st.time_input("Meal time", value=dt.datetime.now().time().replace(second=0, microsecond=0))
+        default_meal_time = st.session_state.get("meal_time_default", _current_time_slot())
+        meal_time = st.time_input(
+            "Meal time",
+            value=default_meal_time,
+            key="meal_time_input",
+            step=dt.timedelta(minutes=5),
+        )
         carbs_grams = st.number_input("Carbohydrates (g)", min_value=0, max_value=400, value=0, step=1)
         submit_meal = st.form_submit_button("Add Meal")
         if submit_meal:
@@ -191,6 +285,8 @@ with tab_meals:
                 st.error("Meal description is required.")
             else:
                 db.add_meal(_fmt_date(meal_date), meal_name.strip(), _time_to_str(meal_time), int(carbs_grams))
+                st.session_state["meal_time_default"] = _current_time_slot()
+                st.session_state.pop("meal_time_input", None)
                 st.success("Meal saved.")
                 _rerun()
     st.markdown("</div>", unsafe_allow_html=True)
@@ -237,9 +333,7 @@ with tab_history:
     st.markdown("---")
 
     history = db.get_history(normalized_category, _fmt_date(start_date), _fmt_date(end_date))
-    if not history:
-        st.info("No entries in this range.")
-    else:
+    if history:
         csv_payload = _history_to_csv(history)
         st.download_button(
             "Download CSV",
@@ -247,6 +341,30 @@ with tab_history:
             file_name=f"history_{_fmt_date(start_date)}_{_fmt_date(end_date)}.csv",
             mime="text/csv",
         )
+    else:
+        st.info("No entries in this range.")
+
+    with st.expander("Import history from CSV"):
+        upload = st.file_uploader(
+            "Select a CSV exported from this tracker",
+            type="csv",
+            key="history_upload",
+            help="Use the download button above to confirm column names.",
+        )
+        import_clicked = st.button("Import entries", key="import_history_button")
+        if import_clicked and upload is None:
+            st.warning("Choose a CSV file before importing.")
+        if import_clicked and upload is not None:
+            added, errors = _import_history_from_csv(upload.getvalue())
+            if added:
+                st.success(f"Imported {added} entr{'y' if added == 1 else 'ies'} from CSV.")
+            if errors:
+                st.error("\n".join(errors))
+            if added:
+                _rerun()
+        st.caption("CSV must include log_date and the relevant columns for sleep, meals, or workouts.")
+
+    if history:
         if normalized_category == "sleep":
             for entry in history:
                 text = (
