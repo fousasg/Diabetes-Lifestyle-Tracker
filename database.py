@@ -62,6 +62,17 @@ def init_db() -> None:
             )
             """
         )
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS comment_logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                log_date TEXT NOT NULL,
+                comment_text TEXT NOT NULL,
+                start_time TEXT,
+                end_time TEXT
+            )
+            """
+        )
         conn.commit()
         _ensure_meal_carbs_column(conn)
 
@@ -216,6 +227,61 @@ def get_workouts_between(start_date: str, end_date: str) -> List[Dict[str, Any]]
     return _rows_to_dicts(rows)
 
 
+# Comment operations -------------------------------------------------------
+
+def add_comment(log_date: str, comment_text: str, start_time: Optional[str], end_time: Optional[str]) -> None:
+    with closing(get_connection()) as conn:
+        conn.execute(
+            """
+            INSERT INTO comment_logs (log_date, comment_text, start_time, end_time)
+            VALUES (?, ?, ?, ?)
+            """,
+            (log_date, comment_text, start_time, end_time),
+        )
+        conn.commit()
+
+
+def update_comment(comment_id: int, comment_text: str, start_time: Optional[str], end_time: Optional[str]) -> None:
+    with closing(get_connection()) as conn:
+        conn.execute(
+            """
+            UPDATE comment_logs
+            SET comment_text = ?, start_time = ?, end_time = ?
+            WHERE id = ?
+            """,
+            (comment_text, start_time, end_time, comment_id),
+        )
+        conn.commit()
+
+
+def delete_comment(comment_id: int) -> None:
+    with closing(get_connection()) as conn:
+        conn.execute("DELETE FROM comment_logs WHERE id = ?", (comment_id,))
+        conn.commit()
+
+
+def get_comments_for_date(log_date: str) -> List[Dict[str, Any]]:
+    with closing(get_connection()) as conn:
+        rows = conn.execute(
+            "SELECT * FROM comment_logs WHERE log_date = ? ORDER BY start_time",
+            (log_date,),
+        ).fetchall()
+    return _rows_to_dicts(rows)
+
+
+def get_comments_between(start_date: str, end_date: str) -> List[Dict[str, Any]]:
+    with closing(get_connection()) as conn:
+        rows = conn.execute(
+            """
+            SELECT * FROM comment_logs
+            WHERE log_date BETWEEN ? AND ?
+            ORDER BY log_date DESC, start_time DESC
+            """,
+            (start_date, end_date),
+        ).fetchall()
+    return _rows_to_dicts(rows)
+
+
 # Historical queries -------------------------------------------------------
 
 def get_days_with_data(start_date: str, end_date: str) -> List[str]:
@@ -276,23 +342,40 @@ def get_history(category: str, start_date: str, end_date: str) -> List[Dict[str,
                 """,
                 (start_date, end_date),
             ).fetchall()
+        elif normalized == "comments":
+            rows = conn.execute(
+                """
+                SELECT * FROM comment_logs
+                WHERE log_date BETWEEN ? AND ?
+                ORDER BY log_date DESC, start_time DESC
+                """,
+                (start_date, end_date),
+            ).fetchall()
         else:
             rows = conn.execute(
                 """
-                  SELECT 'sleep' AS category, id, log_date, wake_time, sleep_time, NULL AS meal_name,
-                      NULL AS meal_time, NULL AS carbs_grams, NULL AS workout_name, NULL AS start_time, NULL AS duration_minutes
+                SELECT 'sleep' AS category, id, log_date, wake_time, sleep_time, NULL AS meal_name,
+                       NULL AS meal_time, NULL AS carbs_grams, NULL AS workout_name, NULL AS start_time, NULL AS duration_minutes,
+                       NULL AS comment_text, NULL AS end_time
                 FROM sleep_logs
                 WHERE log_date BETWEEN ? AND ?
                 UNION ALL
-                  SELECT 'meals' AS category, id, log_date, NULL, NULL, meal_name, meal_time, carbs_grams, NULL, NULL, NULL
+                SELECT 'meals' AS category, id, log_date, NULL, NULL, meal_name, meal_time, carbs_grams, NULL, NULL, NULL,
+                       NULL, NULL
                 FROM meal_logs
                 WHERE log_date BETWEEN ? AND ?
                 UNION ALL
-                  SELECT 'workouts' AS category, id, log_date, NULL, NULL, NULL, NULL, NULL, workout_name, start_time, duration_minutes
+                SELECT 'workouts' AS category, id, log_date, NULL, NULL, NULL, NULL, NULL, workout_name, start_time, duration_minutes,
+                       NULL, NULL
                 FROM workout_logs
+                WHERE log_date BETWEEN ? AND ?
+                UNION ALL
+                SELECT 'comments' AS category, id, log_date, NULL, NULL, NULL, NULL, NULL, NULL, start_time, NULL,
+                       comment_text, end_time
+                FROM comment_logs
                 WHERE log_date BETWEEN ? AND ?
                 ORDER BY log_date DESC
                 """,
-                (start_date, end_date, start_date, end_date, start_date, end_date),
+                (start_date, end_date, start_date, end_date, start_date, end_date, start_date, end_date),
             ).fetchall()
     return _rows_to_dicts(rows)

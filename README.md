@@ -5,6 +5,7 @@ A minimalist Streamlit web app for a single user to log sleep, meals, and workou
 ## Features
 
 - Fast forms to capture sleep, meal, and workout data tied to specific dates
+- Comments tab with free-text notes and optional start/end times
 - Inline editing/deleting for every entry
 - Meal tracking records carbohydrates (grams) alongside time and description
 - SQLite storage that initializes automatically and persists locally

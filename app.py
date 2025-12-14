@@ -77,6 +77,8 @@ def _delete_history_entry(category: str, row: dict) -> None:
         db.delete_meal(row["id"])
     elif normalized == "workouts":
         db.delete_workout(row["id"])
+    elif normalized == "comments":
+        db.delete_comment(row["id"])
 
 
 def _history_to_csv(rows: list[dict]) -> bytes:
@@ -101,6 +103,8 @@ def _infer_category_from_row(row: dict[str, str]) -> Optional[str]:
         return "meals"
     if row.get("workout_name"):
         return "workouts"
+    if row.get("comment_text"):
+        return "comments"
     return None
 
 
@@ -134,7 +138,7 @@ def _import_history_from_csv(file_data: bytes) -> tuple[int, List[str]]:
                 carbs_raw = (row.get("carbs_grams") or "").strip()
                 carbs_val = int(carbs_raw) if carbs_raw else None
                 db.add_meal(log_date, meal_name, meal_time, carbs_val)
-            else:  # workouts
+            elif category == "workouts":
                 workout_name = (row.get("workout_name") or "").strip()
                 start_time = (row.get("start_time") or "").strip()
                 duration_raw = (row.get("duration_minutes") or "").strip()
@@ -146,6 +150,13 @@ def _import_history_from_csv(file_data: bytes) -> tuple[int, List[str]]:
                     start_time,
                     int(duration_raw),
                 )
+            else:  # comments
+                comment_text = (row.get("comment_text") or "").strip()
+                if not comment_text:
+                    raise ValueError("comment entries require comment_text")
+                start_time = (row.get("start_time") or "").strip() or None
+                end_time = (row.get("end_time") or "").strip() or None
+                db.add_comment(log_date, comment_text, start_time, end_time)
             added += 1
         except Exception as exc:  # pragma: no cover - defensive path
             errors.append(f"Row {idx}: {exc}")
@@ -230,10 +241,11 @@ st.caption("Log sleep, meals, and workouts in under two minutes.")
 
 _enforce_access_gate()
 
-tab_sleep, tab_meals, tab_workouts, tab_history = st.tabs([
+tab_sleep, tab_meals, tab_workouts, tab_comments, tab_history = st.tabs([
     "Sleep",
     "Meals",
     "Workouts",
+    "Comments",
     "History",
 ])
 
@@ -316,6 +328,62 @@ with tab_workouts:
     st.markdown("</div>", unsafe_allow_html=True)
 
 
+with tab_comments:
+    st.markdown("<div class='section-card'>", unsafe_allow_html=True)
+    st.subheader("Comments")
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        use_start_time = st.checkbox("Add start time", key="use_comment_start")
+    with col2:
+        use_end_time = st.checkbox("Add end time", key="use_comment_end")
+    
+    with st.form("new_comment"):
+        comment_date = st.date_input("Comment date", value=_default_date(), key="comment_date")
+        comment_text = st.text_area(
+            "Comment",
+            placeholder="Write your notes or observations here...",
+            height=150
+        )
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            if use_start_time:
+                comment_start_time = st.time_input(
+                    "Start time",
+                    value=_current_time_slot(),
+                    key="comment_start_time",
+                    step=dt.timedelta(minutes=5)
+                )
+            else:
+                comment_start_time = None
+        with col2:
+            if use_end_time:
+                comment_end_time = st.time_input(
+                    "End time",
+                    value=_current_time_slot(),
+                    key="comment_end_time",
+                    step=dt.timedelta(minutes=5)
+                )
+            else:
+                comment_end_time = None
+        
+        submit_comment = st.form_submit_button("Add Comment")
+        if submit_comment:
+            if not comment_text.strip():
+                st.error("Comment text is required.")
+            else:
+                db.add_comment(
+                    _fmt_date(comment_date),
+                    comment_text.strip(),
+                    _time_to_str(comment_start_time) if comment_start_time else None,
+                    _time_to_str(comment_end_time) if comment_end_time else None,
+                )
+                st.success("Comment saved.")
+                _rerun()
+    st.markdown("</div>", unsafe_allow_html=True)
+
+
 with tab_history:
     st.markdown("<div class='section-card'>", unsafe_allow_html=True)
     st.subheader("History")
@@ -328,7 +396,7 @@ with tab_history:
         start_date, end_date = range_input
     else:
         start_date, end_date = default_range
-    category = st.selectbox("Filter by category", ("All", "Sleep", "Meals", "Workouts"))
+    category = st.selectbox("Filter by category", ("All", "Sleep", "Meals", "Workouts", "Comments"))
     normalized_category = category.lower()
     st.markdown("---")
 
@@ -362,7 +430,7 @@ with tab_history:
                 st.error("\n".join(errors))
             if added:
                 _rerun()
-        st.caption("CSV must include log_date and the relevant columns for sleep, meals, or workouts.")
+        st.caption("CSV must include log_date and the relevant columns for sleep, meals, workouts, or comments.")
 
     if history:
         if normalized_category == "sleep":
@@ -397,6 +465,19 @@ with tab_history:
                     f"hist_workout_{entry['id']}",
                     lambda row=entry: _delete_history_entry("workouts", row),
                 )
+        elif normalized_category == "comments":
+            for entry in history:
+                time_range = ""
+                if entry.get("start_time"):
+                    time_range = f" at {entry['start_time']}"
+                    if entry.get("end_time"):
+                        time_range += f" - {entry['end_time']}"
+                text = f"💬 {entry['log_date']}{time_range}: {entry['comment_text'][:80]}{'...' if len(entry['comment_text']) > 80 else ''}"
+                _render_history_item(
+                    text,
+                    f"hist_comment_{entry['id']}",
+                    lambda row=entry: _delete_history_entry("comments", row),
+                )
         else:
             grouped = {}
             for row in history:
@@ -414,10 +495,17 @@ with tab_history:
                         text = (
                             f"🍽️ Meal: {row['meal_name']} at {row['meal_time']}{carb_text}"
                         )
-                    else:
+                    elif row["category"] == "workouts":
                         text = (
                             f"💪 Workout: {row['workout_name']} at {row['start_time']} ({row['duration_minutes']} min)"
                         )
+                    else:  # comments
+                        time_range = ""
+                        if row.get("start_time"):
+                            time_range = f" at {row['start_time']}"
+                            if row.get("end_time"):
+                                time_range += f" - {row['end_time']}"
+                        text = f"💬 Comment{time_range}: {row['comment_text'][:80]}{'...' if len(row['comment_text']) > 80 else ''}"
                     _render_history_item(
                         text,
                         f"hist_all_{row['category']}_{row['id']}",
